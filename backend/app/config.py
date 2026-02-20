@@ -1,0 +1,49 @@
+"""
+Botivate HR Support - Central Configuration
+All values are loaded from environment variables / .env file.
+Nothing is hardcoded.
+"""
+
+from pydantic_settings import BaseSettings
+from typing import Optional
+
+
+class Settings(BaseSettings):
+    # --- Application ---
+    app_name: str = "Botivate HR Support"
+    app_env: str = "development"
+    app_secret_key: str = "change-this-to-a-strong-random-secret"
+    app_base_url: str = "http://localhost:8000"
+
+    # --- Master Database ---
+    database_url: str = "sqlite+aiosqlite:///./botivate_master.db"
+
+    # --- LLM ---
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+
+    # --- Google Sheets ---
+    google_service_account_json: str = ""
+
+    # --- SMTP Email ---
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_use_tls: bool = True
+
+    # --- JWT Auth ---
+    jwt_secret_key: str = "change-this-jwt-secret"
+    jwt_algorithm: str = "HS256"
+    jwt_expiration_minutes: int = 480
+
+    # --- ChromaDB ---
+    chroma_persist_dir: str = "./chroma_data"
+
+    # --- Upload Directories ---
+    upload_dir: str = "./uploads"
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+
+
+settings = Settings()

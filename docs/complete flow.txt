@@ -151,7 +151,7 @@
    - AI fetches full profile silently.
    - User does not need to explain who they are.
 
-14. Role-Based Access Control (RBAC)
+14. Role-Based Access Control (RBAC) 
    - Employee:
      - Access only own data.
    - Manager:
