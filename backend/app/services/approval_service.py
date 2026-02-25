@@ -13,7 +13,7 @@ from app.models.models import (
 )
 from app.models.schemas import ApprovalRequestCreate, ApprovalDecision
 from app.adapters.adapter_factory import get_adapter
-from app.utils.email_service import send_notification_email
+from app.utils.email_service import send_oauth_email, NOTIFICATION_TEMPLATE
 from app.agents.hr_agent import get_llm
 from langchain_core.messages import HumanMessage
 
@@ -130,6 +130,33 @@ async def create_approval_request(
     db.add(notification)
     await db.commit()
 
+    # ADD EMAIL NOTIFICATION
+    company_result = await db.execute(select(Company).where(Company.id == company_id))
+    company = company_result.scalar_one_or_none()
+    if company and company.google_refresh_token:
+        # Resolve all recipients (HR + Manager)
+        recipients = [company.hr_email]
+        if data.request_details:
+            mgr_email = data.request_details.get("Manager Email") or data.request_details.get("manager_email")
+            if mgr_email and mgr_email != company.hr_email:
+                recipients.append(mgr_email)
+                
+        for target_email in set(recipients):
+            try:
+                html_body = NOTIFICATION_TEMPLATE.render(
+                    title=notification.title,
+                    message=notification.message,
+                    login_link="http://localhost:5173/login"
+                )
+                await send_oauth_email(
+                    to_email=target_email,
+                    subject=f"Action Required: {data.request_type.replace('_', ' ').title()}",
+                    html_body=html_body,
+                    refresh_token=company.google_refresh_token
+                )
+            except Exception as e:
+                print(f"[OAUTH EMAIL ERROR] Could not send request notification to {target_email}: {e}")
+
     # Also write the request to the company's Google Sheet
     try:
         await write_request_to_sheet(db, request)
@@ -172,6 +199,28 @@ async def process_decision(
     db.add(notification)
     await db.commit()
     await db.refresh(request)
+
+    # ADD EMAIL NOTIFICATION TO EMPLOYEE
+    company_result = await db.execute(select(Company).where(Company.id == request.company_id))
+    company = company_result.scalar_one_or_none()
+    
+    if company and company.google_refresh_token:
+        # Fallback to HR email if employee email is missing from details
+        emp_email = request.request_details.get("email", request.request_details.get("Email", company.hr_email)) if request.request_details else company.hr_email
+        try:
+            html_body = NOTIFICATION_TEMPLATE.render(
+                title=notification.title,
+                message=notification.message,
+                login_link="http://localhost:5173/login"
+            )
+            await send_oauth_email(
+                to_email=emp_email,
+                subject=f"Update: Your request has been {status_text}",
+                html_body=html_body,
+                refresh_token=company.google_refresh_token
+            )
+        except Exception as e:
+            print(f"[OAUTH EMAIL ERROR] Could not send decision notification: {e}")
 
     # Also update the company's Google Sheet if applicable
     if background_tasks:
@@ -359,6 +408,11 @@ async def check_pending_reminders(db: AsyncSession) -> dict:
     for req in pending:
         age = now - req.created_at.replace(tzinfo=timezone.utc)
 
+        # Get company credentials for email
+        company_result = await db.execute(select(Company).where(Company.id == req.company_id))
+        company = company_result.scalar_one_or_none()
+        can_email = company and company.google_refresh_token
+
         # Escalation (72+ hours)
         if age >= timedelta(hours=72) and not req.escalated:
             req.escalated = True
@@ -372,6 +426,13 @@ async def check_pending_reminders(db: AsyncSession) -> dict:
                 related_request_id=req.id,
             )
             db.add(notification)
+            
+            if can_email:
+                try:
+                    html_body = NOTIFICATION_TEMPLATE.render(title=notification.title, message=notification.message, login_link="http://localhost:5173/login")
+                    await send_oauth_email(to_email=company.hr_email, subject=notification.title, html_body=html_body, refresh_token=company.google_refresh_token)
+                except:
+                    pass
             escalations += 1
 
         # Reminder (48+ hours)
@@ -386,6 +447,13 @@ async def check_pending_reminders(db: AsyncSession) -> dict:
                 related_request_id=req.id,
             )
             db.add(notification)
+            
+            if can_email:
+                try:
+                    html_body = NOTIFICATION_TEMPLATE.render(title=notification.title, message=notification.message, login_link="http://localhost:5173/login")
+                    await send_oauth_email(to_email=company.hr_email, subject=notification.title, html_body=html_body, refresh_token=company.google_refresh_token)
+                except:
+                    pass
             reminders_sent += 1
 
     await db.commit()

@@ -20,8 +20,9 @@ ADAPTER_REGISTRY: Dict[DatabaseType, type] = {
     # DatabaseType.EXCEL: ExcelAdapter,
 }
 
+from typing import Dict, Any, Optional
 
-async def get_adapter(db_type: DatabaseType, connection_config: Dict[str, Any]) -> BaseDatabaseAdapter:
+async def get_adapter(db_type: DatabaseType, connection_config: Dict[str, Any], refresh_token: Optional[str] = None) -> BaseDatabaseAdapter:
     """
     Factory function: returns a connected adapter instance for the given DB type.
     """
@@ -31,5 +32,5 @@ async def get_adapter(db_type: DatabaseType, connection_config: Dict[str, Any]) 
                          f"Supported types: {[t.value for t in ADAPTER_REGISTRY.keys()]}")
 
     adapter = adapter_class()
-    await adapter.connect(connection_config)
+    await adapter.connect(connection_config, refresh_token=refresh_token)
     return adapter

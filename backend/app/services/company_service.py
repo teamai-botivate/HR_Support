@@ -18,7 +18,7 @@ from app.models.schemas import (
 from app.adapters.adapter_factory import get_adapter
 from app.services.schema_analyzer import analyze_schema
 from app.utils.password_generator import generate_secure_password
-from app.utils.email_service import send_auth_email
+from app.utils.email_service import send_auth_email, send_oauth_email
 from app.config import settings
 
 
@@ -31,7 +31,6 @@ async def create_company(db: AsyncSession, data: CompanyCreate) -> Company:
         industry=data.industry,
         hr_name=data.hr_name,
         hr_email=data.hr_email,
-        hr_email_password=data.hr_email_password,
         support_email=data.support_email or data.hr_email,
         support_phone=data.support_phone,
         support_whatsapp=data.support_whatsapp,
@@ -128,6 +127,12 @@ async def add_database_connection(
     data: DatabaseConnectionCreate,
 ) -> DatabaseConnection:
     """Add a new database connection for a company and auto-analyze its schema."""
+    
+    # Inject current OAuth token into connection config
+    company = await get_company(db, company_id)
+    if company.google_refresh_token:
+        data.connection_config["google_refresh_token"] = company.google_refresh_token
+        
     db_conn = DatabaseConnection(
         company_id=company_id,
         title=data.title,
@@ -260,23 +265,42 @@ async def auto_provision_employees(
     sent_count = 0
     failed_count = 0
     
-    # Use company's own email credentials if provided, otherwise fallback to system default testing email
-    sender_email = company.hr_email if company.hr_email and company.hr_email_password and company.hr_email_password != 'dummy-password' else settings.smtp_user
-    sender_password = company.hr_email_password if company.hr_email and company.hr_email_password and company.hr_email_password != 'dummy-password' else settings.smtp_password
+    # Use OAuth if configured, otherwise fallback mechanism or skip
+    use_oauth = bool(company.google_refresh_token)
     
-    if sender_email and sender_password:
+    if use_oauth or settings.smtp_user:
         for task in email_tasks:
-            success = await send_auth_email(
-                to_email=task["email"],
-                email_type="welcome",
+            # Format the body
+            from app.utils.email_service import WELCOME_TEMPLATE
+            html_body = WELCOME_TEMPLATE.render(
                 company_name=company.name,
                 company_id=company.id,
                 employee_id=task["emp_id"],
                 password=task["password"],
                 login_link=company.login_link or settings.app_base_url,
-                from_email=sender_email,
-                from_password=sender_password,
             )
+            subject = f"Welcome to {company.name} - Access Your HR Portal"
+            
+            if use_oauth:
+                success = await send_oauth_email(
+                    to_email=task["email"],
+                    subject=subject,
+                    html_body=html_body,
+                    refresh_token=company.google_refresh_token
+                )
+            else:
+                success = await send_auth_email(
+                    to_email=task["email"],
+                    email_type="welcome",
+                    company_name=company.name,
+                    company_id=company.id,
+                    employee_id=task["emp_id"],
+                    password=task["password"],
+                    login_link=company.login_link or settings.app_base_url,
+                    from_email=settings.smtp_user,
+                    from_password=settings.smtp_password,
+                )
+                
             if success:
                 sent_count += 1
                 print(f"[{company_id}][PROVISION LOG] 📧 Successfully sent email to {task['email']}")
@@ -358,17 +382,35 @@ async def update_employee_record(
                             break
                     
                     if email_val:
-                        asyncio.create_task(send_auth_email(
-                            to_email=email_val,
-                            email_type="password_update",
+                        from app.utils.email_service import PASSWORD_UPDATE_TEMPLATE
+                        html_body = PASSWORD_UPDATE_TEMPLATE.render(
                             company_name=company.name,
                             company_id=company.id,
                             employee_id=employee_id,
                             password=updates[password_key],
                             login_link=company.login_link or settings.app_base_url,
-                            from_email=company.hr_email,
-                            from_password=company.hr_email_password
-                        ))
+                        )
+                        subject = f"Security Notification: Your Password for {company.name} has been updated"
+                        
+                        if company.google_refresh_token:
+                            asyncio.create_task(send_oauth_email(
+                                to_email=email_val,
+                                subject=subject,
+                                html_body=html_body,
+                                refresh_token=company.google_refresh_token
+                            ))
+                        else:
+                            asyncio.create_task(send_auth_email(
+                                to_email=email_val,
+                                email_type="password_update",
+                                company_name=company.name,
+                                company_id=company.id,
+                                employee_id=employee_id,
+                                password=updates[password_key],
+                                login_link=company.login_link or settings.app_base_url,
+                                from_email=settings.smtp_user,
+                                from_password=settings.smtp_password
+                            ))
                         print(f"[AUTH UPDATE] Password update email triggered for {email_val}")
         except Exception as e:
             print(f"[AUTH UPDATE ERROR] Failed to send update email: {e}")
@@ -443,17 +485,35 @@ async def create_employee_record(
                     password_val = f"{name_val[:3].capitalize()}1234"
                 
                 if email_val:
-                    asyncio.create_task(send_auth_email(
-                        to_email=email_val,
-                        email_type="welcome",
+                    from app.utils.email_service import WELCOME_TEMPLATE
+                    html_body = WELCOME_TEMPLATE.render(
                         company_name=company.name,
                         company_id=company.id,
                         employee_id=data[primary_key],
                         password=password_val,
                         login_link=company.login_link or settings.app_base_url,
-                        from_email=company.hr_email,
-                        from_password=company.hr_email_password
-                    ))
+                    )
+                    subject = f"Welcome to {company.name} - Access Your HR Portal"
+                    
+                    if company.google_refresh_token:
+                        asyncio.create_task(send_oauth_email(
+                            to_email=email_val,
+                            subject=subject,
+                            html_body=html_body,
+                            refresh_token=company.google_refresh_token
+                        ))
+                    else:
+                        asyncio.create_task(send_auth_email(
+                            to_email=email_val,
+                            email_type="welcome",
+                            company_name=company.name,
+                            company_id=company.id,
+                            employee_id=data[primary_key],
+                            password=password_val,
+                            login_link=company.login_link or settings.app_base_url,
+                            from_email=settings.smtp_user,
+                            from_password=settings.smtp_password
+                        ))
                     print(f"[ONBOARD] Professional Welcome Email triggered for {email_val}")
         except Exception as e:
             print(f"[EMAIL SEND ERROR] Failed in create_employee_record: {e}")

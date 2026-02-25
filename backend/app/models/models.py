@@ -68,7 +68,10 @@ class Company(Base):
     industry = Column(String(255), nullable=True)
     hr_name = Column(String(255), nullable=False)
     hr_email = Column(String(255), nullable=False)
-    hr_email_password = Column(String(512), nullable=True)  # Encrypted SMTP password
+    # OAuth 2.0 Credentials (replaces password)
+    google_refresh_token = Column(String(512), nullable=True)
+    google_access_token = Column(String(512), nullable=True)
+    token_expiry = Column(DateTime, nullable=True)
     support_email = Column(String(255), nullable=True)
     support_phone = Column(String(50), nullable=True)
     support_whatsapp = Column(String(50), nullable=True)

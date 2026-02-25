@@ -6,7 +6,7 @@ This is the DEFAULT adapter used for employee data.
 
 import json
 import gspread
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
 from typing import Any, Dict, List, Optional
 from app.adapters.base_adapter import BaseDatabaseAdapter
 from app.config import settings
@@ -34,8 +34,8 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         self.worksheet = None
         self._headers: List[str] = []
 
-    async def connect(self, config: Dict[str, Any]) -> None:
-        """Connect to Google Sheets using service account credentials."""
+    async def connect(self, config: Dict[str, Any], refresh_token: Optional[str] = None) -> None:
+        """Connect to Google Sheets using the HR's OAuth refresh token."""
         print(f"[GOOGLE SHEETS] 🔌 Connecting to Database using config...")
         raw_spreadsheet_input = config.get("spreadsheet_id", "")
         sheet_name = config.get("sheet_name", None)
@@ -51,12 +51,18 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
             if len(parts) > 1:
                 spreadsheet_id = parts[1].split("/")[0]
 
-        # Load service account credentials
-        sa_path = settings.google_service_account_json
-        if not sa_path:
-            raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON path not configured in environment.")
+        if not refresh_token:
+            print("[GOOGLE SHEETS] ❌ ERROR: No OAuth refresh_token provided for company.")
+            raise ValueError("Company must connect their Google Workspace first to access the sheet.")
 
-        credentials = Credentials.from_service_account_file(sa_path, scopes=SCOPES)
+        # Rebuild OAuth credentials using the stored refresh token
+        credentials = Credentials(
+            None, # Empty access token (force refresh)
+            refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=settings.google_oauth_client_id,
+            client_secret=settings.google_oauth_client_secret
+        )
         self.client = gspread.authorize(credentials)
 
         self.spreadsheet = self.client.open_by_key(spreadsheet_id)

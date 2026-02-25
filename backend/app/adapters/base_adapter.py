@@ -15,7 +15,7 @@ class BaseDatabaseAdapter(ABC):
     """
 
     @abstractmethod
-    async def connect(self, config: Dict[str, Any]) -> None:
+    async def connect(self, config: Dict[str, Any], refresh_token: Optional[str] = None) -> None:
         """Establish connection to the external database using dynamic config."""
         pass
 

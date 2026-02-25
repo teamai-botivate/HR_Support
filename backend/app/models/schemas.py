@@ -16,7 +16,7 @@ class CompanyCreate(BaseModel):
     industry: Optional[str] = None
     hr_name: str = Field(..., min_length=1)
     hr_email: str = Field(...)
-    hr_email_password: Optional[str] = None
+
     support_email: Optional[str] = None
     support_phone: Optional[str] = None
     support_whatsapp: Optional[str] = None

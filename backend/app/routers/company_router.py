@@ -284,3 +284,69 @@ async def update_employee_record(
     except Exception as e:
         print(f"[EMPLOYEE UPDATE ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── OAuth 2.0 Integration ────────────────────────────────
+from google_auth_oauthlib.flow import Flow
+
+@router.post("/oauth-exchange")
+async def exchange_google_token(code_data: dict, db: AsyncSession = Depends(get_db)):
+    code = code_data.get("code")
+    company_id = code_data.get("company_id")
+    
+    if not code or not company_id:
+        raise HTTPException(status_code=400, detail="Missing authorization code or company_id.")
+        
+    company = await company_service.get_company(db, company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    
+    # Set up the OAuth flow using your client_secret.json or direct env variables
+    client_config = {
+        "web": {
+            "client_id": settings.google_oauth_client_id,
+            "project_id": "botivate",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": settings.google_oauth_client_secret
+        }
+    }
+    
+    try:
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=[
+                'https://mail.google.com/',
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive'
+            ],
+            redirect_uri=settings.google_oauth_redirect_uri
+        )
+        
+        # Exchange the code for the tokens
+        flow.fetch_token(code=code)
+        credentials = flow.credentials
+        
+        # Save to the database
+        company.google_refresh_token = credentials.refresh_token
+        company.google_access_token = credentials.token
+        company.token_expiry = credentials.expiry
+        
+        # Propagate the token to existing database connections
+        from sqlalchemy import select
+        from app.models.models import DatabaseConnection
+        dbs_result = await db.execute(select(DatabaseConnection).where(DatabaseConnection.company_id == company_id))
+        dbs = dbs_result.scalars().all()
+        for d in dbs:
+            if d.connection_config:
+                config = dict(d.connection_config)
+                config["google_refresh_token"] = credentials.refresh_token
+                d.connection_config = config
+                
+        await db.commit()
+        
+        return {"message": "Email connected successfully!"}
+    except Exception as e:
+        print(f"[OAUTH EXCHANGE ERROR] {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to connect email: {str(e)}")

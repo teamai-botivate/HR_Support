@@ -22,8 +22,11 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
 
-    # --- Google Sheets ---
+    # --- Google Sheets / OAuth ---
     google_service_account_json: str = ""
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str = "http://localhost:5173/oauth/callback"
 
     # --- SMTP Email ---
     smtp_host: str = "smtp.gmail.com"

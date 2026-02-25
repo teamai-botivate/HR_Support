@@ -10,6 +10,9 @@ from typing import Optional
 from app.config import settings
 from jinja2 import Template
 import asyncio
+import base64
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 
 
 # ── Professional Email Templates ──────────────────────────
@@ -227,3 +230,46 @@ async def send_notification_email(
             return False
 
     return await asyncio.to_thread(_send_sync_notif)
+
+
+async def send_oauth_email(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    refresh_token: str
+) -> bool:
+    """Sends email using Gmail API instead of SMTP/Passwords."""
+    try:
+        # 1. Rebuild credentials using the stored refresh token
+        creds = Credentials(
+            None, # Empty access token (google library will use refresh token to get a new one)
+            refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=settings.google_oauth_client_id,
+            client_secret=settings.google_oauth_client_secret
+        )
+
+        # 2. Build the Gmail API service
+        def _build_and_send():
+            service = build('gmail', 'v1', credentials=creds)
+
+            # 3. Construct the Message
+            message = MIMEMultipart('alternative')
+            message['To'] = to_email
+            message['Subject'] = subject
+            message.attach(MIMEText(html_body, 'html'))
+            
+            # Gmail API requires URL-safe base64 encoding
+            raw_string = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+            # 4. Send the email!
+            service.users().messages().send(
+                userId='me', 
+                body={'raw': raw_string}
+            ).execute()
+            return True
+            
+        return await asyncio.to_thread(_build_and_send)
+    except Exception as e:
+        print(f"[OAUTH EMAIL ERROR] Failed to send to {to_email}: {e}")
+        return False
