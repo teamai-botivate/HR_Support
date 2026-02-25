@@ -100,23 +100,48 @@ PASSWORD_UPDATE_TEMPLATE = Template(f"""
 NOTIFICATION_TEMPLATE = Template("""
 <!DOCTYPE html>
 <html>
-<head><style>
-  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f9; padding: 30px; }
-  .card { background: #fff; border-radius: 12px; padding: 40px; max-width: 500px; margin: auto;
-          box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
-  h2 { color: #1a1a2e; }
-  p { color: #555; line-height: 1.6; }
-  .btn { display: block; text-align: center; background: #6C63FF; color: #fff !important;
-         padding: 14px; border-radius: 8px; text-decoration: none; font-weight: 600;
-         margin-top: 20px; }
-</style></head>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 40px 10px; margin: 0; color: #334155; }
+  .email-wrapper { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05); border: 1px solid #e2e8f0; }
+  .header { background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 35px 30px; text-align: center; }
+  .header h1 { color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 1px; }
+  .body { padding: 40px 30px; line-height: 1.7; }
+  .body h2 { color: #0f172a; font-size: 20px; margin-top: 0; margin-bottom: 20px; text-align: left; }
+  .body p { margin-bottom: 24px; color: #475569; font-size: 15px; text-align: left; }
+  .btn-container { text-align: left; margin-top: 35px; }
+  .btn { display: inline-block; background: #2563eb; color: #ffffff !important; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2); }
+  .footer { background: #f8fafc; padding: 25px 30px; text-align: center; border-top: 1px solid #e2e8f0; }
+  .footer p { color: #94a3b8; font-size: 12px; margin: 0; }
+</style>
+</head>
 <body>
-<div class="card">
-  <h2>{{ title }}</h2>
-  <p>{{ message }}</p>
-  {% if login_link %}
-  <a class="btn" href="{{ login_link }}">Open HR Portal</a>
-  {% endif %}
+<div class="email-wrapper">
+  <div class="header">
+    <h1>{{ company_name|upper }}</h1>
+  </div>
+  <div class="body">
+    <h2>{{ title }}</h2>
+    
+    {% if action_by %}
+    <div style="background: #f1f5f9; padding: 16px; border-radius: 8px; margin-bottom: 24px; border-left: 4px solid #3b82f6;">
+      <p style="margin: 0 0 6px 0; font-size: 14px; color: #475569;"><strong>Action By:</strong> <span style="color: #1e293b; font-weight: 500;">{{ action_by }}</span> {% if action_role %}<span style="color: #64748b;">({{ action_role }})</span>{% endif %}</p>
+      {% if status %}<p style="margin: 0; font-size: 14px; color: #475569;"><strong>Status:</strong> <span style="color: #0f172a; font-weight: 600;">{{ status }}</span></p>{% endif %}
+    </div>
+    {% endif %}
+
+    <p>{{ message }}</p>
+    
+    {% if login_link %}
+    <div class="btn-container">
+      <a href="{{ login_link }}" class="btn">View Request in Portal</a>
+    </div>
+    {% endif %}
+  </div>
+  <div class="footer">
+    <p>This notification was securely sent on behalf of <strong>{{ company_name }}</strong>.<br>Powered by Botivate HR AI.</p>
+  </div>
 </div>
 </body>
 </html>
@@ -190,12 +215,20 @@ async def send_notification_email(
     from_email: str,
     from_password: str,
     login_link: Optional[str] = None,
+    company_name: str = "Botivate HR",
+    action_by: Optional[str] = None,
+    action_role: Optional[str] = None,
+    action_status: Optional[str] = None,
 ) -> bool:
     """Send a notification email (approval request, status update, reminder, etc.)"""
     html_body = NOTIFICATION_TEMPLATE.render(
+        company_name=company_name,
         title=title,
         message=message,
         login_link=login_link,
+        action_by=action_by,
+        action_role=action_role,
+        status=action_status,
     )
 
     msg = MIMEMultipart("alternative")

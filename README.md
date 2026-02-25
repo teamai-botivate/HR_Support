@@ -15,7 +15,8 @@ Botivate HR Support is a standalone HR platform where a single AI-powered chatbo
 - ✅ **Zero Auto-Approval Policy** — AI never approves; all decisions require human authorization
 - 🔔 **Smart Notifications** — In-app bell + 48h reminders + 72h escalation
 - 🗄️ **Pluggable Database Adapters** — Google Sheets (default), PostgreSQL, MongoDB (extensible)
-- 📧 **Credential Distribution** — Auto-generates passwords and emails them from the company's own HR email
+- 📧 **OAuth 2.0 Gmail Integration** — Emails are securely sent on behalf of HR without requiring passwords
+- 🧾 **Professional Email UI** — Next-Gen, responsive HTML/CSS email templates for all notifications and credentials
 
 ---
 

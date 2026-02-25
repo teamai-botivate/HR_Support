@@ -19,7 +19,7 @@ from langchain_core.messages import HumanMessage
 
 # ── Generate Summary Report ──────────────────────────────
 
-async def generate_summary_report(db: AsyncSession, company_id: str, employee_id: str, request_type: str, context: str, request_details: dict) -> str:
+async def generate_summary_report(db: AsyncSession, company_id: str, employee_id: str, request_type: str, context: str, request_details: dict) -> tuple[str, dict]:
     """Generate a short, concise summary report using AI to help authorities decide."""
     from app.models.models import DatabaseConnection
     
@@ -68,18 +68,19 @@ For example:
 - If it's a resignation, check their tenure, performance score, or notice period.
 - If it's an expense claim, check their project allocation or past claims.
 
-Write a very short, crisp report (2-4 sentences) summarizing:
-1. What the employee is asking for.
-2. The most critical data points from their profile (leave balance, pending tasks, recent performance, etc.).
-3. A neutral summary to help the manager decide. Do NOT approve or reject it yourself.
+Write a very short, crisp report summarizing the situation. Please format exactly as 3 structured lines like this:
 
-Output ONLY the short text report. Do not use markdown headers."""
+Request Summary: <What the employee is asking for>
+Profile Metrics: <The most critical data points from their profile: leave balance, pending tasks, recent performance, etc.>
+Decision Factors: <A neutral summary of factors to help the manager decide>
+
+Do NOT output any markdown symbols (* or #), just plain text with exactly these three labels followed by a colon."""
         
         resp = await llm.ainvoke([HumanMessage(content=prompt)])
-        return resp.content.strip()
+        return resp.content.strip(), emp_data
     except Exception as e:
         print(f"[SUMMARY REPORT ERROR] LLM generation failed: {e}")
-        return "Automated summary could not be generated at this time."
+        return "Automated summary could not be generated at this time.", emp_data
 
 
 # ── Create Approval Request ──────────────────────────────
@@ -93,14 +94,25 @@ async def create_approval_request(
     Record a new approval request in the database.
     AI calls this; AI NEVER approves.
     """
-    # Generate a dynamic summary report
-    summary_text = await generate_summary_report(
+    # Generate a dynamic summary report and fetch employee data
+    summary_text, emp_data = await generate_summary_report(
         db, company_id, data.employee_id, data.request_type, data.context or "", data.request_details or {}
     )
 
     # Store the report in request_details (dynamic storage)
     details = data.request_details or {}
     details["summary_report"] = summary_text
+    
+    # Store emails from Google Sheets for guaranteed email routing
+    if "email" not in details:
+        emp_email = emp_data.get("Email") or emp_data.get("email") or emp_data.get("Employee Email") or emp_data.get("Personal Email")
+        if emp_email:
+            details["email"] = str(emp_email).strip()
+            
+    if "manager_email" not in details:
+        mgr_email = emp_data.get("Manager Email") or emp_data.get("manager_email") or emp_data.get("Reporting Manager Email") or emp_data.get("Manager Email ID")
+        if mgr_email:
+            details["manager_email"] = str(mgr_email).strip()
     
     request = ApprovalRequest(
         company_id=company_id,
@@ -118,11 +130,15 @@ async def create_approval_request(
     await db.refresh(request)
 
     # Create notification for the authority
+    display_type = data.request_type.replace('_', ' ').title()
+    if not display_type.lower().endswith("request"):
+        display_type += " Request"
+
     notification = Notification(
         company_id=company_id,
         target_employee_id="__authority__",  # Will be resolved by role
-        title=f"New {data.request_type.replace('_', ' ').title()} Request",
-        message=f"{data.employee_name or data.employee_id} has submitted a {data.request_type} request. "
+        title=f"New {display_type}",
+        message=f"{data.employee_name or data.employee_id} has submitted a {display_type.lower()}. "
                 f"Priority: {data.priority.value.upper()}. Please review and take action.",
         notification_type="approval_request",
         related_request_id=request.id,
@@ -136,17 +152,20 @@ async def create_approval_request(
     if company and company.google_refresh_token:
         # Resolve all recipients (HR + Manager)
         recipients = [company.hr_email]
-        if data.request_details:
-            mgr_email = data.request_details.get("Manager Email") or data.request_details.get("manager_email")
-            if mgr_email and mgr_email != company.hr_email:
-                recipients.append(mgr_email)
+        mgr_email = details.get("manager_email") or details.get("Manager Email")
+        if mgr_email and str(mgr_email).strip() and str(mgr_email).strip() != company.hr_email:
+            recipients.append(str(mgr_email).strip())
                 
         for target_email in set(recipients):
             try:
                 html_body = NOTIFICATION_TEMPLATE.render(
+                    company_name=company.name,
                     title=notification.title,
                     message=notification.message,
-                    login_link="http://localhost:5173/login"
+                    login_link="http://localhost:5173/login",
+                    action_by=data.employee_name or data.employee_id,
+                    action_role="Employee",
+                    status="Pending Review"
                 )
                 await send_oauth_email(
                     to_email=target_email,
@@ -187,11 +206,15 @@ async def process_decision(
 
     # Create notification for the employee
     status_text = "approved" if decision.status == RequestStatus.APPROVED else "rejected"
+    display_type = request.request_type.replace('_', ' ')
+    if not display_type.lower().endswith("request"):
+        display_type += " request"
+        
     notification = Notification(
         company_id=request.company_id,
         target_employee_id=request.employee_id,
-        title=f"Request {status_text.title()}",
-        message=f"Your {request.request_type} request has been {status_text} by {decided_by}."
+        title=f"{display_type.title()} {status_text.title()}",
+        message=f"Your {display_type.lower()} has been {status_text} by {decided_by}."
                 + (f" Note: {decision.decision_note}" if decision.decision_note else ""),
         notification_type="decision_update",
         related_request_id=request.id,
@@ -209,9 +232,13 @@ async def process_decision(
         emp_email = request.request_details.get("email", request.request_details.get("Email", company.hr_email)) if request.request_details else company.hr_email
         try:
             html_body = NOTIFICATION_TEMPLATE.render(
+                company_name=company.name,
                 title=notification.title,
                 message=notification.message,
-                login_link="http://localhost:5173/login"
+                login_link="http://localhost:5173/login",
+                action_by=decided_by,
+                action_role="Authorized Approver",
+                status=status_text.upper()
             )
             await send_oauth_email(
                 to_email=emp_email,
@@ -388,8 +415,8 @@ async def mark_notification_read(db: AsyncSession, notification_id: str) -> bool
 async def check_pending_reminders(db: AsyncSession) -> dict:
     """
     Background task: runs periodically to check overdue approvals.
-    - After 48 hours → send reminder
-    - After 72 hours → escalate
+    - After 48 hours -> send reminder
+    - After 72 hours -> escalate
     """
     now = datetime.now(timezone.utc)
     reminder_threshold = now - timedelta(hours=48)

@@ -52,6 +52,9 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
                 spreadsheet_id = parts[1].split("/")[0]
 
         if not refresh_token:
+            refresh_token = config.get("google_refresh_token")
+
+        if not refresh_token:
             print("[GOOGLE SHEETS] ❌ ERROR: No OAuth refresh_token provided for company.")
             raise ValueError("Company must connect their Google Workspace first to access the sheet.")
 

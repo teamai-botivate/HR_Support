@@ -16,20 +16,20 @@ export default function LoginPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
-    
+
     // 1. Log what we are sending
     console.log("[FRONTEND LOG] 🚀 Starting Login request...");
     const payload = {
-        company_id: formData.companyId.trim(),
-        employee_id: formData.employeeId.trim(),
-        password: formData.password.trim()
+      company_id: formData.companyId.trim(),
+      employee_id: formData.employeeId.trim(),
+      password: formData.password.trim()
     };
     console.log("[FRONTEND LOG] 📦 Payload:", { ...payload, password: "***HIDDEN***" });
 
     try {
       console.log(`[FRONTEND LOG] 🌐 Sending POST to http://localhost:8000/api/auth/login`);
       const response = await axios.post('http://localhost:8000/api/auth/login', payload);
-      
+
       console.log("[FRONTEND LOG] ✅ Backend Response received:", response.status, response.data);
 
       if (response.data && response.data.access_token) {
@@ -73,7 +73,7 @@ export default function LoginPage() {
         <div className="auth-card">
           <h1>Botivate HR</h1>
           <p className="subtitle">Secure access to your company workspace</p>
-          
+
           <form className="auth-form" onSubmit={handleSubmit}>
             <div className="form-group">
               <label>Company ID</label>
@@ -85,7 +85,7 @@ export default function LoginPage() {
                   style={{ paddingLeft: '2.5rem' }}
                   placeholder="Enter your company ID"
                   value={formData.companyId}
-                  onChange={(e) => setFormData({...formData, companyId: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, companyId: e.target.value })}
                   required
                 />
               </div>
@@ -101,7 +101,7 @@ export default function LoginPage() {
                   style={{ paddingLeft: '2.5rem' }}
                   placeholder="e.g. EMP001"
                   value={formData.employeeId}
-                  onChange={(e) => setFormData({...formData, employeeId: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, employeeId: e.target.value })}
                   required
                 />
               </div>
@@ -117,7 +117,7 @@ export default function LoginPage() {
                   style={{ paddingLeft: '2.5rem' }}
                   placeholder="••••••••"
                   value={formData.password}
-                  onChange={(e) => setFormData({...formData, password: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   required
                 />
               </div>
@@ -131,7 +131,15 @@ export default function LoginPage() {
           </form>
 
           <div className="auth-footer">
-            <p>Don't have a company account? <Link to="/onboarding">Register here</Link></p>
+            <p>Don't have a company account? <span
+              onClick={() => {
+                localStorage.removeItem('botivate_onboarding_company');
+                localStorage.removeItem('botivate_google_connected');
+                localStorage.removeItem('botivate_onboarding_form');
+                navigate('/onboarding');
+              }}
+              style={{ color: 'var(--brand-primary)', cursor: 'pointer', textDecoration: 'underline' }}
+            >Register here</span></p>
           </div>
         </div>
       </div>

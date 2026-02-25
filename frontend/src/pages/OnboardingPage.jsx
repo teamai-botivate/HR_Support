@@ -365,8 +365,19 @@ export default function OnboardingPage() {
                     </div>
 
                     <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
-                      <button type="button" onClick={() => setStep(1)} className="btn btn-secondary" style={{ flex: 1 }}>
-                        Back
+                      <button type="button" onClick={() => {
+                        localStorage.removeItem('botivate_onboarding_company');
+                        localStorage.removeItem('botivate_google_connected');
+                        localStorage.removeItem('botivate_onboarding_form');
+                        setGlobalCompanyId(null);
+                        setGoogleConnected(false);
+                        setStep(1);
+                        setFormData({
+                          companyName: '', industry: '', contactName: '',
+                          contactEmail: '', policiesText: '', dbUrl: '', policyFile: null
+                        });
+                      }} className="btn btn-secondary" style={{ flex: 1, backgroundColor: '#fef2f2', color: '#dc2626', borderColor: '#fca5a5' }}>
+                        Restart (Cancel)
                       </button>
                       <button type="submit" className="btn btn-primary" style={{ flex: 2 }} disabled={isLoading}>
                         {isLoading ? 'Setting up Workspace...' : 'Finalize Integration'}
