@@ -69,10 +69,18 @@ async def send_message(
             primary_key = schema_map.get("primary_key", "")
             master_table = schema_map.get("master_table", None)
 
-            # Auto-validate schema: re-analyze if primary_key not in actual headers
-            actual_headers = await adapter.get_headers(table_name=master_table)
-            if primary_key and primary_key not in actual_headers:
-                print(f"[CHAT] Schema stale! primary_key '{primary_key}' not in headers of {master_table}. Re-analyzing...")
+            # Auto-validate schema: re-analyze if primary_key not in actual headers OR if multi-table structure is missing
+            needs_reanalysis = False
+            if master_table is None or "child_tables" not in schema_map:
+                needs_reanalysis = True
+                print(f"[CHAT] Legacy schema detected (missing master_table/child_tables). Forcing re-analysis for multi-tab support...")
+            else:
+                actual_headers = await adapter.get_headers(table_name=master_table)
+                if primary_key and primary_key not in actual_headers:
+                    needs_reanalysis = True
+                    print(f"[CHAT] Schema stale! primary_key '{primary_key}' not in headers of {master_table}. Re-analyzing...")
+
+            if needs_reanalysis:
                 from app.services.schema_analyzer import analyze_schema
                 
                 # Fetch all tables for re-analysis
