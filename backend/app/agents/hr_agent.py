@@ -71,7 +71,7 @@ Classify ALL intents present in this message. A single message can have MULTIPLE
 Available intent categories:
 - "greeting" — Hello, hi, good morning, etc.
 - "policy_query" — Questions about company rules, policies, leave policy, etc.
-- "data_query" — Checking leave balance, salary info, personal details, etc.
+- "data_query" — Checking leave balance, salary info, personal details, holidays, team size, etc.
 - "data_update" — HR/Admin wants to UPDATE employee data (change designation, update salary, modify details)
 - "leave_request" — Applying for leave, requesting time off
 - "resignation" — Submitting resignation
@@ -90,6 +90,7 @@ Examples:
 Return ONLY the intent string(s), nothing else.
 """
 
+    print(f"\n[{state['company_id']}][AGENT INTENT] Analyzing intent for: '{state['current_input']}'")
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     raw_intent = response.content.strip().lower().replace('"', '').replace(' ', '')
     
@@ -123,16 +124,15 @@ Return ONLY the intent string(s), nothing else.
     # Filter out noisy secondary intents to prevent overlapping responses
     final_intents = [primary_intent]
     for intent in valid_intents[1:]:
-        # If we already have a specific action/query, skip 'greeting', 'general'
         if intent in {"greeting", "general"}:
             continue
-        # If answering status check, skip 'data_query' because status_check handles it correctly
         if primary_intent == "status_check" and intent == "data_query":
             continue
-        # If data update or request, skip 'data_query'
         if primary_intent in {"data_update", "leave_request", "resignation"} and intent == "data_query":
             continue
         final_intents.append(intent)
+
+    print(f"[{state['company_id']}][AGENT INTENT] Primary Intent: '{primary_intent}', All Intents: {final_intents}")
 
     # Store the primary intent for routing, and filtered intents for multi-processing
     state["intent"] = primary_intent
@@ -147,6 +147,8 @@ async def handle_greeting(state: AgentState) -> AgentState:
     emp = state.get("employee_data", {})
     name = state.get("employee_name", "there")
     role = state.get("role", "employee")
+
+    print(f"[{state['company_id']}][AGENT GREETING] Triggering greeting for {name}.")
 
     state["response"] = (
         f"Hello {name}! 👋 Welcome to your HR Support Portal. "
@@ -163,6 +165,7 @@ async def handle_greeting(state: AgentState) -> AgentState:
 async def handle_policy_query(state: AgentState) -> AgentState:
     """Answer policy questions using RAG or direct DB fallback. Handles both text and document policies."""
     from app.config import settings as app_settings
+    print(f"[{state['company_id']}][AGENT POLICY] Handling policy query: '{state['current_input']}'")
     
     answer = None
     used_rag = False
@@ -170,15 +173,18 @@ async def handle_policy_query(state: AgentState) -> AgentState:
     # Step 1: Try RAG if OpenAI key is available
     if app_settings.openai_api_key and app_settings.openai_api_key != "your-openai-api-key-here":
         try:
+            print(f"[{state['company_id']}][AGENT POLICY] Querying RAG system...")
             answer = await answer_from_policies(state["company_id"], state["current_input"])
             # Check if RAG actually found something meaningful
             if answer and "could not find" not in answer.lower() and "no relevant" not in answer.lower():
                 used_rag = True
+                print(f"[{state['company_id']}][AGENT POLICY] RAG found a matching policy.")
         except Exception as e:
-            print(f"[POLICY RAG ERROR] {e}")
+            print(f"[{state['company_id']}][POLICY RAG ERROR] {e}")
     
     # Step 2: If RAG didn't work, fetch policies directly from internal DB
     if not used_rag:
+        print(f"[{state['company_id']}][AGENT POLICY] RAG did not answer. Falling back to direct DB fetch...")
         try:
             from app.database import async_session_factory
             from app.services.company_service import get_policies
@@ -205,7 +211,7 @@ async def handle_policy_query(state: AgentState) -> AgentState:
                                     with open(p.file_path, "r", encoding="utf-8") as f:
                                         content = f.read()
                             except Exception as fe:
-                                print(f"[POLICY FILE READ ERROR] {fe}")
+                                print(f"[{state['company_id']}][POLICY FILE READ ERROR] {fe}")
                                 content = content or f"(Document: {p.file_name or p.file_path})"
                         
                         if content:
@@ -216,6 +222,7 @@ async def handle_policy_query(state: AgentState) -> AgentState:
                     # If we have AI, use it to format a nice answer from the policy data
                     if app_settings.openai_api_key and app_settings.openai_api_key != "your-openai-api-key-here":
                         try:
+                            print(f"[{state['company_id']}][AGENT POLICY] Formatting DB fallback with LLM...")
                             llm = get_llm()
                             full_context = "\n\n---\n\n".join(policy_texts)
                             fmt_prompt = f"""You are an HR assistant. Answer the employee's question using ONLY the company policies provided below.
@@ -243,12 +250,13 @@ FORMATTING RULES:
                 else:
                     answer = "No policies have been added for your company yet. Please contact your HR department."
         except Exception as e:
-            print(f"[POLICY DB FALLBACK ERROR] {e}")
+            print(f"[{state['company_id']}][POLICY DB FALLBACK ERROR] {e}")
             answer = "I could not retrieve policies at this time. Please try again later."
     
     state["response"] = answer or "I could not find any policy information. Please contact your HR department."
     state["policy_answer"] = state["response"]
     state["actions"] = []
+    print(f"[{state['company_id']}][AGENT POLICY] Policy query handled successfully.")
     return state
 
 
@@ -258,14 +266,19 @@ async def handle_data_query(state: AgentState) -> AgentState:
     """Fetch live data from the company's database and answer.
     Uses Pydantic-verified data. Always fetches the logged-in employee's own data first.
     """
+    print(f"\n[{state['company_id']}][AGENT DATA QUERY] 🟢 Starting Data Query node for user: {state['employee_name']} ({state['employee_id']})")
+    print(f"[{state['company_id']}][AGENT DATA QUERY] Input Query: '{state['current_input']}'")
+    
     try:
         from app.models.schemas import ValidatedSchemaMap, VerifiedEmployeeRecord
         
         # Validate schema_map using Pydantic
         try:
             validated_schema = ValidatedSchemaMap(**state["schema_map"])
+            print(f"[{state['company_id']}][AGENT DATA QUERY] Schema validated successfully. Master table: {validated_schema.master_table}")
+            print(f"[{state['company_id']}][AGENT DATA QUERY] Discovered Child Tables: {list(validated_schema.child_tables.keys()) if validated_schema.child_tables else 'None'}")
         except Exception as schema_err:
-            print(f"[DATA QUERY] Schema validation failed: {schema_err}")
+            print(f"[{state['company_id']}][AGENT DATA QUERY] ❌ Schema validation failed: {schema_err}")
             state["response"] = "Your company's database schema is not configured properly. Please contact HR."
             state["actions"] = []
             return state
@@ -279,10 +292,10 @@ async def handle_data_query(state: AgentState) -> AgentState:
         own_record = state.get("employee_data", {})
         
         if not own_record:
-            # Fallback: fetch from adapter if state doesn't have it
+            print(f"[{state['company_id']}][AGENT DATA QUERY] Checking adapter for direct own_record fetch...")
             db_type = DatabaseType(state.get("db_type", "google_sheets"))
             adapter = await get_adapter(db_type, state["db_config"])
-            own_record = await adapter.get_record_by_key(primary_key, employee_id) or {}
+            own_record = await adapter.get_record_by_key(primary_key, employee_id, table_name=validated_schema.master_table) or {}
         
         # Step 2: Pydantic verification — ensure record belongs to THIS employee
         if own_record:
@@ -294,9 +307,9 @@ async def handle_data_query(state: AgentState) -> AgentState:
                     record=own_record,
                     primary_key_column=primary_key,
                 )
-                print(f"[DATA QUERY] ✅ Pydantic verified: {employee_id} matches record {found_id}")
+                print(f"[{state['company_id']}][AGENT DATA QUERY] ✅ Pydantic verified own record: {employee_id} == {found_id}")
             except ValueError as ve:
-                print(f"[DATA QUERY] ❌ Pydantic verification FAILED: {ve}")
+                print(f"[{state['company_id']}][AGENT DATA QUERY] ❌ Pydantic verification FAILED for own record: {ve}")
                 # Record doesn't match! Re-fetch with strict matching
                 db_type = DatabaseType(state.get("db_type", "google_sheets"))
                 adapter = await get_adapter(db_type, state["db_config"])
@@ -308,13 +321,15 @@ async def handle_data_query(state: AgentState) -> AgentState:
                         own_record = r
                         break
                 if not own_record:
+                    print(f"[{state['company_id']}][AGENT DATA QUERY] ❌ Employee '{employee_id}' not found in master table '{master_table}'")
                     state["response"] = f"I could not find your record in the database (Employee ID: {employee_id})."
                     state["actions"] = []
                     return state
 
-        # Fetch child table records related to this employee
+        # Fetch child table records related to this employee or static small tables
         child_tables_data = {}
         if validated_schema.child_tables:
+            print(f"[{state['company_id']}][AGENT DATA QUERY] Extracting data from child tables...")
             db_type = DatabaseType(state.get("db_type", "google_sheets"))
             adapter = await get_adapter(db_type, state["db_config"])
             for child_table_name in validated_schema.child_tables.keys():
@@ -326,10 +341,18 @@ async def handle_data_query(state: AgentState) -> AgentState:
                         # Match if employee_id is in any of the column values
                         if employee_id.lower() in [str(v).strip().lower() for v in r.values()]:
                             employee_child_recs.append(r)
+                            
+                    # If the table has NO records for the employee but has less than 100 rows, 
+                    # it might be a shared/global table (like Holidays). Check table name / row count.
+                    if not employee_child_recs and len(all_child_recs) < 50:
+                        employee_child_recs = all_child_recs  # Include whole table
+                        print(f"[{state['company_id']}][AGENT DATA QUERY] Included '{child_table_name}' entirely as a shared/global small table.")
+
                     if employee_child_recs:
                         child_tables_data[child_table_name] = employee_child_recs
+                        print(f"[{state['company_id']}][AGENT DATA QUERY] Included '{child_table_name}' with {len(employee_child_recs)} records.")
                 except Exception as ce:
-                    print(f"[DATA QUERY] Failed to fetch child table '{child_table_name}': {ce}")
+                    print(f"[{state['company_id']}][AGENT DATA QUERY] Failed to fetch child table '{child_table_name}': {ce}")
 
         # Step 3: Build data context based on role
         data_context = json.dumps(own_record, indent=2, default=str) if own_record else "No data found."
@@ -338,19 +361,22 @@ async def handle_data_query(state: AgentState) -> AgentState:
         
         # For admin/manager roles asking about other employees, fetch team data too
         extra_context = ""
-        if role in ("hr", "admin", "manager"):
-            user_question = state["current_input"].lower()
-            # Only fetch all records if the question is clearly about other employees or team
-            team_keywords = ["team", "all employee", "everyone", "department", "report", "staff", "headcount"]
+        # Adding some generic keywords here to trigger team context
+        team_keywords = ["team", "all employee", "everyone", "department", "report", "staff", "headcount", "dashboard", "total employee", "kitne employee"]
+        user_question = state["current_input"].lower()
+        if role in ("hr", "admin", "manager") or any(kw in user_question for kw in team_keywords):
             if any(kw in user_question for kw in team_keywords):
+                print(f"[{state['company_id']}][AGENT DATA QUERY] Team/Dashboard keywords detected. Pulling team data context.")
                 db_type = DatabaseType(state.get("db_type", "google_sheets"))
                 adapter = await get_adapter(db_type, state["db_config"])
                 master_table = validated_schema.master_table
                 records = await adapter.get_all_records(table_name=master_table)
-                extra_context = f"\n\nAdditional team data (you have {role} access):\n{json.dumps(records[:30], indent=2, default=str)}"
+                extra_context = f"\n\nAdditional team data (you have {role} access. Total employees: {len(records)}):\n{json.dumps(records[:50], indent=2, default=str)}"
 
         # Step 4: Ask LLM to answer from verified data
         llm = get_llm()
+        print(f"[{state['company_id']}][AGENT DATA QUERY] Context prepared. Sending context to AI (Length: {len(data_context) + len(extra_context)} chars).")
+        
         answer_prompt = f"""You are an HR assistant. Answer the employee's question using ONLY the data below.
 
 IMPORTANT: The logged-in employee is {state['employee_name']} (ID: {state['employee_id']}).
@@ -377,9 +403,11 @@ Rules:
         response = await llm.ainvoke([HumanMessage(content=answer_prompt)])
         state["response"] = response.content.strip()
         state["query_result"] = state["response"]
+        print(f"[{state['company_id']}][AGENT DATA QUERY] ✅ AI Response generated.")
 
     except Exception as e:
-        print(f"[DATA QUERY ERROR] {e}")
+        import traceback
+        print(f"[{state['company_id']}][AGENT DATA QUERY ERROR] {e}\n{traceback.format_exc()}")
         state["response"] = f"I encountered an issue while fetching your data. Please try again. (Error: {str(e)})"
 
     state["actions"] = []
