@@ -20,47 +20,52 @@ class BaseDatabaseAdapter(ABC):
         pass
 
     @abstractmethod
-    async def get_headers(self) -> List[str]:
+    async def get_available_tables(self) -> List[str]:
+        """Return the names of all available tables/worksheets in the database."""
+        pass
+
+    @abstractmethod
+    async def get_headers(self, table_name: Optional[str] = None) -> List[str]:
         """Return the column headers / field names from the data source."""
         pass
 
     @abstractmethod
-    async def get_all_records(self) -> List[Dict[str, Any]]:
+    async def get_all_records(self, table_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch all records from the data source."""
         pass
 
     @abstractmethod
-    async def get_record_by_key(self, key_column: str, key_value: str) -> Optional[Dict[str, Any]]:
+    async def get_record_by_key(self, key_column: str, key_value: str, table_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Fetch a single record by its primary key value."""
         pass
 
     @abstractmethod
-    async def get_records_by_filter(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def get_records_by_filter(self, filters: Dict[str, Any], table_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch records matching the given filter criteria."""
         pass
 
     @abstractmethod
-    async def update_record(self, key_column: str, key_value: str, updates: Dict[str, Any]) -> bool:
+    async def update_record(self, key_column: str, key_value: str, updates: Dict[str, Any], table_name: Optional[str] = None) -> bool:
         """Update a single record identified by key_column = key_value."""
         pass
 
     @abstractmethod
-    async def add_column(self, column_name: str, default_values: Optional[List[Any]] = None) -> bool:
+    async def add_column(self, column_name: str, default_values: Optional[List[Any]] = None, table_name: Optional[str] = None) -> bool:
         """Add a new column to the data source."""
         pass
 
     @abstractmethod
     async def update_column_values(self, column_name: str, key_column: str,
-                                    key_value_map: Dict[str, Any]) -> bool:
+                                    key_value_map: Dict[str, Any], table_name: Optional[str] = None) -> bool:
         """Bulk update values in a specific column, keyed by the primary identifier."""
         pass
 
     @abstractmethod
-    async def get_column_values(self, column_name: str) -> List[Any]:
+    async def get_column_values(self, column_name: str, table_name: Optional[str] = None) -> List[Any]:
         """Get all values for a specific column."""
         pass
 
     @abstractmethod
-    async def create_record(self, data: Dict[str, Any]) -> bool:
+    async def create_record(self, data: Dict[str, Any], table_name: Optional[str] = None) -> bool:
         """Create a new record in the data source."""
         pass

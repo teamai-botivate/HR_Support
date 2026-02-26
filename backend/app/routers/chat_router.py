@@ -67,21 +67,30 @@ async def send_message(
             from app.models.schemas import VerifiedEmployeeRecord
             adapter = await get_adapter(db_conn.db_type, db_conn.connection_config)
             primary_key = schema_map.get("primary_key", "")
+            master_table = schema_map.get("master_table", None)
 
             # Auto-validate schema: re-analyze if primary_key not in actual headers
-            actual_headers = await adapter.get_headers()
+            actual_headers = await adapter.get_headers(table_name=master_table)
             if primary_key and primary_key not in actual_headers:
-                print(f"[CHAT] Schema stale! primary_key '{primary_key}' not in headers. Re-analyzing...")
+                print(f"[CHAT] Schema stale! primary_key '{primary_key}' not in headers of {master_table}. Re-analyzing...")
                 from app.services.schema_analyzer import analyze_schema
-                new_schema = await analyze_schema(actual_headers)
+                
+                # Fetch all tables for re-analysis
+                available_tables = await adapter.get_available_tables()
+                tables_headers = {}
+                for tb in available_tables:
+                    tables_headers[tb] = await adapter.get_headers(table_name=tb)
+                    
+                new_schema = await analyze_schema(tables_headers)
                 schema_map = new_schema.model_dump()
                 db_conn.schema_map = schema_map
                 await db.commit()
                 primary_key = schema_map.get("primary_key", "")
-                print(f"[CHAT] Re-analyzed. New primary_key: '{primary_key}'")
+                master_table = schema_map.get("master_table", None)
+                print(f"[CHAT] Re-analyzed. New primary_key: '{primary_key}', master_table: '{master_table}'")
 
-            print(f"[CHAT] Fetching employee '{user.employee_id}' using primary_key '{primary_key}'")
-            raw_record = await adapter.get_record_by_key(primary_key, user.employee_id)
+            print(f"[CHAT] Fetching employee '{user.employee_id}' using primary_key '{primary_key}' in '{master_table}'")
+            raw_record = await adapter.get_record_by_key(primary_key, user.employee_id, table_name=master_table)
             
             # Pydantic verification: ensure fetched record belongs to the logged-in user
             if raw_record:
@@ -98,7 +107,7 @@ async def send_message(
                 except ValueError as ve:
                     print(f"[CHAT] ❌ Pydantic verification FAILED: {ve}")
                     # Strict fallback: manually search all records
-                    all_recs = await adapter.get_all_records()
+                    all_recs = await adapter.get_all_records(table_name=master_table)
                     for r in all_recs:
                         if str(r.get(primary_key, "")).strip().lower() == user.employee_id.strip().lower():
                             employee_data = r
@@ -125,11 +134,12 @@ async def send_message(
     # Pre-fetch the employee's entire row using the ID from the token (validated)
     adapter = await get_adapter(db_conn.db_type, db_conn.connection_config)
     print(f"[{company_id}][CHAT LOG] Fetching comprehensive row record for Employee ID '{employee_id}'...")
-    employee_record = await adapter.get_record_by_key(primary_key_col, employee_id)
+    master_table = schema_map.get("master_table", None) if schema_map else None
+    employee_record = await adapter.get_record_by_key(primary_key_col, employee_id, table_name=master_table)
     
     if not employee_record:
        print(f"[{company_id}][CHAT LOG] ⚠️ WARNING: Could not find exact direct match for '{employee_id}' across column '{primary_key_col}'. Applying fallback matching (Case-Insensitive)...")
-       all_records = await adapter.get_all_records()
+       all_records = await adapter.get_all_records(table_name=master_table)
        for rec in all_records:
            rec_val = str(rec.get(primary_key_col, "")).strip().lower()
            if rec_val == employee_id.strip().lower():

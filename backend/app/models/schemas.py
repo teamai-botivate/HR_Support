@@ -221,7 +221,8 @@ class SchemaAnalysisResult(BaseModel):
     whatsapp: Optional[str] = None
     role_column: Optional[str] = None
     categories: Dict[str, List[str]]
-
+    master_table: Optional[str] = None
+    child_tables: Optional[Dict[str, Dict[str, Any]]] = None
 
 # ── Validated Schema Map (Pydantic enforced) ─────────────
 
@@ -234,6 +235,8 @@ class ValidatedSchemaMap(BaseModel):
     whatsapp: Optional[str] = None
     role_column: Optional[str] = None
     categories: Optional[Dict[str, List[str]]] = None
+    master_table: Optional[str] = None
+    child_tables: Optional[Dict[str, Dict[str, Any]]] = None
 
     @field_validator('primary_key', 'employee_name')
     @classmethod

@@ -300,7 +300,8 @@ async def handle_data_query(state: AgentState) -> AgentState:
                 # Record doesn't match! Re-fetch with strict matching
                 db_type = DatabaseType(state.get("db_type", "google_sheets"))
                 adapter = await get_adapter(db_type, state["db_config"])
-                all_records = await adapter.get_all_records()
+                master_table = validated_schema.master_table
+                all_records = await adapter.get_all_records(table_name=master_table)
                 own_record = None
                 for r in all_records:
                     if str(r.get(primary_key, "")).strip().lower() == employee_id.strip().lower():
@@ -311,8 +312,29 @@ async def handle_data_query(state: AgentState) -> AgentState:
                     state["actions"] = []
                     return state
 
+        # Fetch child table records related to this employee
+        child_tables_data = {}
+        if validated_schema.child_tables:
+            db_type = DatabaseType(state.get("db_type", "google_sheets"))
+            adapter = await get_adapter(db_type, state["db_config"])
+            for child_table_name in validated_schema.child_tables.keys():
+                try:
+                    all_child_recs = await adapter.get_all_records(table_name=child_table_name)
+                    # Filter for records belonging to this employee
+                    employee_child_recs = []
+                    for r in all_child_recs:
+                        # Match if employee_id is in any of the column values
+                        if employee_id.lower() in [str(v).strip().lower() for v in r.values()]:
+                            employee_child_recs.append(r)
+                    if employee_child_recs:
+                        child_tables_data[child_table_name] = employee_child_recs
+                except Exception as ce:
+                    print(f"[DATA QUERY] Failed to fetch child table '{child_table_name}': {ce}")
+
         # Step 3: Build data context based on role
         data_context = json.dumps(own_record, indent=2, default=str) if own_record else "No data found."
+        if child_tables_data:
+            data_context += f"\n\nRelated Records (from other tabs):\n{json.dumps(child_tables_data, indent=2, default=str)}"
         
         # For admin/manager roles asking about other employees, fetch team data too
         extra_context = ""
@@ -323,7 +345,8 @@ async def handle_data_query(state: AgentState) -> AgentState:
             if any(kw in user_question for kw in team_keywords):
                 db_type = DatabaseType(state.get("db_type", "google_sheets"))
                 adapter = await get_adapter(db_type, state["db_config"])
-                records = await adapter.get_all_records()
+                master_table = validated_schema.master_table
+                records = await adapter.get_all_records(table_name=master_table)
                 extra_context = f"\n\nAdditional team data (you have {role} access):\n{json.dumps(records[:30], indent=2, default=str)}"
 
         # Step 4: Ask LLM to answer from verified data

@@ -149,10 +149,16 @@ async def add_database_connection(
     try:
         print(f"[{company_id}][SERVICE LOG] 👉 Starting AI Schema Analysis for the new Database...")
         adapter = await get_adapter(data.db_type, data.connection_config)
-        print(f"[{company_id}][SERVICE LOG] Adapter instantiated. Fetching headers...")
-        headers = await adapter.get_headers()
-        print(f"[{company_id}][SERVICE LOG] Headers found: {headers}. Sending to AI for mapping...")
-        schema_result = await analyze_schema(headers)
+        print(f"[{company_id}][SERVICE LOG] Adapter instantiated. Fetching available tables...")
+        available_tables = await adapter.get_available_tables()
+        print(f"[{company_id}][SERVICE LOG] Found tables: {available_tables}")
+        
+        tables_headers = {}
+        for tb in available_tables:
+            tables_headers[tb] = await adapter.get_headers(table_name=tb)
+        
+        print(f"[{company_id}][SERVICE LOG] Headers fetched for all tables. Sending to AI for mapping...")
+        schema_result = await analyze_schema(tables_headers)
 
         # Save schema map to the database connection
         db_conn.schema_map = schema_result.model_dump()
@@ -219,18 +225,19 @@ async def auto_provision_employees(
     primary_key = schema.get("primary_key")
     email_col = schema.get("email")
     name_col = schema.get("employee_name")
+    master_table = schema.get("master_table")
 
     if not primary_key:
         print(f"[{company_id}][PROVISION LOG] ❌ FAILED: 'primary_key' not defined in schema mapping.")
         return {"error": "Could not determine primary key from schema"}
 
-    print(f"[{company_id}][PROVISION LOG] 👉 Step 1: Telling Adapter to add 'system_password' column if it doesn't exist...")
+    print(f"[{company_id}][PROVISION LOG] 👉 Step 1: Telling Adapter to add 'system_password' column if it doesn't exist in {master_table or 'default'}...")
     # Step 1: Add system_password column
-    await adapter.add_column("system_password")
+    await adapter.add_column("system_password", table_name=master_table)
 
     print(f"[{company_id}][PROVISION LOG] 👉 Step 2: Fetching all existing records to generate passwords...")
     # Step 2: Generate passwords for all employees
-    records = await adapter.get_all_records()
+    records = await adapter.get_all_records(table_name=master_table)
     print(f"[{company_id}][PROVISION LOG] Fetched {len(records)} records. Generating distinct passwords...")
     password_map = {}
     email_tasks = []
@@ -257,7 +264,7 @@ async def auto_provision_employees(
 
     print(f"[{company_id}][PROVISION LOG] 👉 Step 3: Batch updating {len(password_map)} generated passwords into Google Sheet...")
     # Step 3: Write passwords to the sheet
-    await adapter.update_column_values("system_password", primary_key, password_map)
+    await adapter.update_column_values("system_password", primary_key, password_map, table_name=master_table)
     print(f"[{company_id}][PROVISION LOG] ✅ Passwords pushed to Google Sheet.")
 
     print(f"[{company_id}][PROVISION LOG] 👉 Step 4: Dispatching credential emails via configured SMTP...")
@@ -335,7 +342,8 @@ async def get_all_employee_data(db: AsyncSession, company_id: str) -> List[dict]
         return []
     
     adapter = await get_adapter(db_conn.db_type, db_conn.connection_config)
-    return await adapter.get_all_records()
+    master_table = db_conn.schema_map.get("master_table") if db_conn.schema_map else None
+    return await adapter.get_all_records(table_name=master_table)
 
 
 async def update_employee_record(
@@ -356,11 +364,12 @@ async def update_employee_record(
         return {"error": "Database connection not found"}
     
     primary_key = db_conn.schema_map.get("primary_key")
+    master_table = db_conn.schema_map.get("master_table")
     if not primary_key:
         return {"error": "Primary key not defined in schema mapping"}
         
     adapter = await get_adapter(db_conn.db_type, db_conn.connection_config)
-    success = await adapter.update_record(primary_key, employee_id, updates)
+    success = await adapter.update_record(primary_key, employee_id, updates, table_name=master_table)
     
     if success:
         # ── Send Update Notification if Password Changed ────
@@ -372,7 +381,7 @@ async def update_employee_record(
                 company = comp_result.scalar_one_or_none()
                 
                 # Fetch current employee record to get email if not in updates
-                emp_record = await adapter.get_record_by_key(primary_key, employee_id)
+                emp_record = await adapter.get_record_by_key(primary_key, employee_id, table_name=master_table)
                 if company and emp_record:
                     email_val = None
                     # Search for email in the record
@@ -439,10 +448,12 @@ async def create_employee_record(
     adapter = await get_adapter(db_conn.db_type, db_conn.connection_config)
     
     # Auto-generate Employee ID if not provided
-    primary_key = db_conn.schema_map.get("primary_key", "Employee ID")
+    primary_key = db_conn.schema_map.get("primary_key", "Employee ID") if db_conn.schema_map else "Employee ID"
+    master_table = db_conn.schema_map.get("master_table") if db_conn.schema_map else None
+    
     if primary_key not in data or not data[primary_key]:
         # Fetch current IDs to find the last one
-        all_records = await adapter.get_all_records()
+        all_records = await adapter.get_all_records(table_name=master_table)
         last_id_num = 0
         import re
         for rec in all_records:
@@ -456,7 +467,7 @@ async def create_employee_record(
         new_id = f"EMP{str(last_id_num + 1).zfill(3)}"
         data[primary_key] = new_id
 
-    success = await adapter.create_record(data)
+    success = await adapter.create_record(data, table_name=master_table)
     
     if success:
         # ── Send Credential Email ───────────────────────────

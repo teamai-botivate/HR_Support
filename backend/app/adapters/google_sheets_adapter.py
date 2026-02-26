@@ -32,7 +32,8 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         self.client: Optional[gspread.Client] = None
         self.spreadsheet = None
         self.worksheet = None
-        self._headers: List[str] = []
+        self.worksheet = None
+        self._headers_cache: Dict[str, List[str]] = {}
 
     async def connect(self, config: Dict[str, Any], refresh_token: Optional[str] = None) -> None:
         """Connect to Google Sheets using the HR's OAuth refresh token."""
@@ -78,25 +79,46 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
             self.worksheet = self.spreadsheet.sheet1
             print(f"[GOOGLE SHEETS] 📄 Connected to default worksheet1: '{self.worksheet.title}'")
 
-        # Cache headers
-        self._headers = self.worksheet.row_values(1)
+        # Cache headers for default worksheet
+        self._headers_cache[self.worksheet.title] = self.worksheet.row_values(1)
 
-    async def get_headers(self) -> List[str]:
-        """Return column headers from row 1."""
-        if not self._headers and self.worksheet:
-            self._headers = self.worksheet.row_values(1)
-        return self._headers
+    def _get_target_worksheet(self, table_name: Optional[str] = None):
+        """Helper to get the target worksheet."""
+        if not self.spreadsheet:
+            raise ConnectionError("Not connected to Google Sheets.")
+        
+        if table_name:
+            return self.spreadsheet.worksheet(table_name)
+        elif self.worksheet:
+            return self.worksheet
+        else:
+            raise ConnectionError("No default worksheet connected.")
 
-    async def get_all_records(self) -> List[Dict[str, Any]]:
+    async def get_available_tables(self) -> List[str]:
+        """Return titles of all worksheets in the Google Sheet."""
+        if not self.spreadsheet:
+            raise ConnectionError("Not connected to Google Sheets.")
+        
+        return [ws.title for ws in self.spreadsheet.worksheets()]
+
+    async def get_headers(self, table_name: Optional[str] = None) -> List[str]:
+        """Return column headers from row 1 of the target worksheet."""
+        ws = self._get_target_worksheet(table_name)
+        title = ws.title
+        
+        if title not in self._headers_cache:
+            self._headers_cache[title] = ws.row_values(1)
+        return self._headers_cache[title]
+
+    async def get_all_records(self, table_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch all records as a list of dicts."""
-        if not self.worksheet:
-            raise ConnectionError("Not connected to any worksheet.")
-        return self.worksheet.get_all_records()
+        ws = self._get_target_worksheet(table_name)
+        return ws.get_all_records()
 
-    async def get_record_by_key(self, key_column: str, key_value: str) -> Optional[Dict[str, Any]]:
+    async def get_record_by_key(self, key_column: str, key_value: str, table_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Find a single record by its primary key column value."""
-        print(f"[GOOGLE SHEETS] 🔍 Searching for record where '{key_column}' == '{key_value}'...")
-        records = await self.get_all_records()
+        print(f"[GOOGLE SHEETS] 🔍 Searching for record where '{key_column}' == '{key_value}' in table '{table_name or 'default'}'...")
+        records = await self.get_all_records(table_name)
         print(f"[GOOGLE SHEETS] Iterating over {len(records)} total records to find match...")
         for record in records:
             if str(record.get(key_column, "")).strip().lower() == str(key_value).strip().lower():
@@ -106,9 +128,9 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         print(f"[GOOGLE SHEETS] ❌ FAILED: Record '{key_value}' NOT found after checking {len(records)} rows.")
         return None
 
-    async def get_records_by_filter(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def get_records_by_filter(self, filters: Dict[str, Any], table_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Filter records matching all key-value pairs in filters."""
-        records = await self.get_all_records()
+        records = await self.get_all_records(table_name)
         results = []
         for record in records:
             match = True
@@ -120,18 +142,17 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
                 results.append(record)
         return results
 
-    async def update_record(self, key_column: str, key_value: str, updates: Dict[str, Any]) -> bool:
+    async def update_record(self, key_column: str, key_value: str, updates: Dict[str, Any], table_name: Optional[str] = None) -> bool:
         """Update a specific employee's fields by locating their row.
         If a column in updates doesn't exist, it will be auto-created."""
-        if not self.worksheet:
-            raise ConnectionError("Not connected to any worksheet.")
+        ws = self._get_target_worksheet(table_name)
 
-        headers = await self.get_headers()
+        headers = await self.get_headers(table_name)
         if key_column not in headers:
             raise ValueError(f"Key column '{key_column}' not found in headers.")
 
         key_col_index = headers.index(key_column) + 1  # gspread is 1-indexed
-        cell = self.worksheet.find(str(key_value), in_column=key_col_index)
+        cell = ws.find(str(key_value), in_column=key_col_index)
 
         if not cell:
             return False
@@ -143,8 +164,8 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         for col_name, value in updates.items():
             if col_name not in headers:
                 try:
-                    await self.add_column(col_name)
-                    headers = await self.get_headers()
+                    await self.add_column(col_name, table_name=table_name)
+                    headers = await self.get_headers(table_name)
                 except: continue
             
             if col_name in headers:
@@ -158,26 +179,25 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         
         if updates_list:
             # batch_update is more compatible across gspread versions
-            self.worksheet.batch_update(updates_list)
+            ws.batch_update(updates_list)
 
         return True
 
-    async def create_record(self, data: Dict[str, Any]) -> bool:
+    async def create_record(self, data: Dict[str, Any], table_name: Optional[str] = None) -> bool:
         """Create a new record (row) in the Google Sheet."""
-        if not self.worksheet:
-            raise ConnectionError("Not connected to any worksheet.")
+        ws = self._get_target_worksheet(table_name)
 
-        headers = await self.get_headers()
+        headers = await self.get_headers(table_name)
         
         # Ensure all columns in the new record exist in the sheet
         headers_updated = False
         for col_name in data.keys():
             if col_name not in headers:
-                await self.add_column(col_name)
+                await self.add_column(col_name, table_name=table_name)
                 headers_updated = True
         
         if headers_updated:
-            headers = await self.get_headers()
+            headers = await self.get_headers(table_name)
 
         # Construct the row values in order
         new_row = []
@@ -185,15 +205,14 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
             new_row.append(data.get(h, ""))
 
         # Append to the bottom
-        self.worksheet.append_row(new_row)
+        ws.append_row(new_row)
         return True
 
-    async def add_column(self, column_name: str, default_values: Optional[List[Any]] = None) -> bool:
+    async def add_column(self, column_name: str, default_values: Optional[List[Any]] = None, table_name: Optional[str] = None) -> bool:
         """Add a new column at the end of the sheet."""
-        if not self.worksheet:
-            raise ConnectionError("Not connected to any worksheet.")
+        ws = self._get_target_worksheet(table_name)
 
-        headers = await self.get_headers()
+        headers = await self.get_headers(table_name)
 
         # Check if column already exists
         if column_name in headers:
@@ -202,8 +221,8 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         new_col_index = len(headers) + 1
         
         # Expand grid horizontally if needed
-        if new_col_index > self.worksheet.col_count:
-            self.worksheet.add_cols(1)
+        if new_col_index > ws.col_count:
+            ws.add_cols(1)
             
         cells_to_update = [gspread.Cell(row=1, col=new_col_index, value=column_name)]
 
@@ -212,19 +231,18 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
             for i, val in enumerate(default_values):
                 cells_to_update.append(gspread.Cell(row=i + 2, col=new_col_index, value=val))
 
-        self.worksheet.update_cells(cells_to_update)
+        ws.update_cells(cells_to_update)
 
         # Refresh headers cache
-        self._headers = self.worksheet.row_values(1)
+        self._headers_cache[ws.title] = ws.row_values(1)
         return True
 
     async def update_column_values(self, column_name: str, key_column: str,
-                                    key_value_map: Dict[str, Any]) -> bool:
+                                    key_value_map: Dict[str, Any], table_name: Optional[str] = None) -> bool:
         """Bulk update a column's values using a mapping of {key_value: new_value}."""
-        if not self.worksheet:
-            raise ConnectionError("Not connected to any worksheet.")
+        ws = self._get_target_worksheet(table_name)
 
-        headers = await self.get_headers()
+        headers = await self.get_headers(table_name)
         if column_name not in headers:
             raise ValueError(f"Column '{column_name}' not found.")
         if key_column not in headers:
@@ -233,7 +251,7 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         key_col_idx = headers.index(key_column) + 1
         target_col_idx = headers.index(column_name) + 1
 
-        all_values = self.worksheet.col_values(key_col_idx)
+        all_values = ws.col_values(key_col_idx)
         cells_to_update = []
 
         for row_idx, cell_value in enumerate(all_values):
@@ -244,19 +262,18 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
                 cells_to_update.append(gspread.Cell(row=row_idx + 1, col=target_col_idx, value=key_value_map[clean_val]))
 
         if cells_to_update:
-            self.worksheet.update_cells(cells_to_update)
+            ws.update_cells(cells_to_update)
 
         return True
 
-    async def get_column_values(self, column_name: str) -> List[Any]:
+    async def get_column_values(self, column_name: str, table_name: Optional[str] = None) -> List[Any]:
         """Get all values for a specific column (excluding header)."""
-        if not self.worksheet:
-            raise ConnectionError("Not connected to any worksheet.")
+        ws = self._get_target_worksheet(table_name)
 
-        headers = await self.get_headers()
+        headers = await self.get_headers(table_name)
         if column_name not in headers:
             raise ValueError(f"Column '{column_name}' not found.")
 
         col_idx = headers.index(column_name) + 1
-        all_values = self.worksheet.col_values(col_idx)
+        all_values = ws.col_values(col_idx)
         return all_values[1:]  # Exclude header
