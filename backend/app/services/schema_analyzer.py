@@ -9,6 +9,11 @@ import json
 import re
 from typing import List, Dict, Union
 
+from app.config import settings
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+from app.models.schemas import SchemaAnalysisResult
+
 async def analyze_schema(headers_input: Union[List[str], Dict[str, List[str]]]) -> SchemaAnalysisResult:
     """
     Analyze column headers using AI and return a structured schema map.
